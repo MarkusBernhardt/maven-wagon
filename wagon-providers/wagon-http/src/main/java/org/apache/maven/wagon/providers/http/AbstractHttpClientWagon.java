@@ -76,6 +76,8 @@ import org.apache.maven.wagon.shared.http.EncodingUtil;
 import org.codehaus.plexus.util.IOUtil;
 import org.codehaus.plexus.util.StringUtils;
 
+import com.github.markusbernhardt.proxy.ProxySearch;
+
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import java.io.ByteArrayInputStream;
@@ -85,9 +87,16 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.MalformedURLException;
+import java.net.Proxy;
+import java.net.ProxySelector;
+import java.net.URISyntaxException;
+import java.net.URL;
 import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
@@ -1148,5 +1157,71 @@ public abstract class AbstractHttpClientWagon
     public static int getMaxBackoffWaitSeconds()
     {
         return MAX_BACKOFF_WAIT_SECONDS;
+    }
+    
+    @Override
+    protected ProxyInfo getProxyInfo( String protocol, String host )
+    {
+        ProxyInfo proxyInfo = super.getProxyInfo( protocol, host );
+
+        // Check for magic hostname
+        if ( proxyInfo == null || !"proxy-vole".equals( proxyInfo.getHost() ) )
+        {
+            // Don't use proxy-vole to detect proxy settings
+            return proxyInfo;
+        }
+
+        // Use the static factory method getDefaultProxySearch to create a
+        // proxy search instance configured with the default proxy search
+        // strategies for the current environment.
+        ProxySearch proxySearch = ProxySearch.getDefaultProxySearch();
+
+        // Invoke the proxy search. This will create a ProxySelector with
+        // the detected proxy settings.
+        ProxySelector proxySelector = proxySearch.getProxySelector();
+
+        try
+        {
+            // Detect the list of proxies for the given protocol and host
+            List<Proxy> proxies = proxySelector.select( new URL( protocol, host, "" ).toURI() );
+            if ( proxies.size() == 0 )
+            {
+                return null;
+            }
+
+            // Use the first detected proxy
+            Proxy proxy = proxies.get( 0 );
+            
+            // Check proxy type
+            if ( proxy.type() == Proxy.Type.DIRECT )
+            {
+                return null;
+            }
+            
+            // Create a copy of the ProxyInfo instance
+            ProxyInfo detectedProxyInfo = new ProxyInfo();
+            detectedProxyInfo.setNonProxyHosts( proxyInfo.getNonProxyHosts() );
+            detectedProxyInfo.setNtlmDomain( proxyInfo.getNtlmDomain() );
+            detectedProxyInfo.setNtlmHost( proxyInfo.getNtlmHost() );
+            detectedProxyInfo.setPassword( proxyInfo.getPassword() );
+            detectedProxyInfo.setType( proxyInfo.getType() );
+            detectedProxyInfo.setUserName( proxyInfo.getUserName() );
+            
+            // Set the detected proxy
+            InetSocketAddress inetSocketAddress = ( InetSocketAddress ) proxy.address();
+            detectedProxyInfo.setHost( inetSocketAddress.getHostName() );
+            detectedProxyInfo.setPort( inetSocketAddress.getPort() );
+            return detectedProxyInfo;
+        }
+        catch ( MalformedURLException e )
+        {
+            // Ugly, but works for now
+            throw new RuntimeException( e.getMessage(), e );
+        }
+        catch ( URISyntaxException e )
+        {
+            // Ugly, but works for now
+            throw new RuntimeException( e.getMessage(), e );
+        }
     }
 }
